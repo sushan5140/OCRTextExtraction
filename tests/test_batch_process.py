@@ -125,6 +125,72 @@ def test_transcribe_lines_with_custom_fn():
     assert raw == ["Raw text 1", "Raw text 2"]
     assert nlp == ["NLP text 1", "NLP text 2"]
 
+def test_transcribe_lines_batches_model_inference(tmp_path):
+    from PIL import Image
+
+    image_paths = []
+    for i in range(5):
+        path = tmp_path / f"line_{i}.png"
+        Image.new("RGB", (32, 16), "white").save(path)
+        image_paths.append(path)
+
+    class FakePixelValues:
+        def __init__(self, count):
+            self.count = count
+
+        def to(self, device):
+            return self
+
+    class FakeBatch:
+        def __init__(self, count):
+            self.pixel_values = FakePixelValues(count)
+
+    class FakeProcessor:
+        def __init__(self):
+            self.batch_sizes = []
+
+        def __call__(self, images, return_tensors):
+            self.batch_sizes.append(len(images))
+            assert return_tensors == "pt"
+            return FakeBatch(len(images))
+
+        def batch_decode(self, generated_ids, skip_special_tokens):
+            assert skip_special_tokens is True
+            return generated_ids
+
+    class FakeModel:
+        def __init__(self):
+            self.next_line = 1
+            self.batch_sizes = []
+
+        def generate(self, pixel_values, max_new_tokens, num_beams):
+            self.batch_sizes.append(pixel_values.count)
+            assert max_new_tokens == 32
+            assert num_beams == 1
+            values = [f"hola {i}" for i in range(self.next_line, self.next_line + pixel_values.count)]
+            self.next_line += pixel_values.count
+            return values
+
+    processor = FakeProcessor()
+    model = FakeModel()
+
+    raw, nlp = transcribe_lines(
+        image_paths,
+        processor=processor,
+        model=model,
+        batch_size=2,
+    )
+
+    assert raw == ["hola 1", "hola 2", "hola 3", "hola 4", "hola 5"]
+    assert len(nlp) == 5
+    assert processor.batch_sizes == [2, 2, 1]
+    assert model.batch_sizes == [2, 2, 1]
+
+
+def test_transcribe_lines_rejects_invalid_batch_size():
+    with pytest.raises(ValueError, match="batch_size must be at least 1"):
+        transcribe_lines([], transcribe_fn=lambda *_: ("", ""), batch_size=0)
+
 
 def test_process_image_end_to_end(tmp_path):
     output_dir = tmp_path / "output"

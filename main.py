@@ -198,6 +198,7 @@ if __name__ == "__main__":
     parser.add_argument("--image", "-i", default=None, help="Path to single image file to process")
     parser.add_argument("--output", "-o", default="output", help="Output directory (default: output)")
     parser.add_argument("--model-dir", "-m", default=LOCAL_MODEL_DIR, help="Local model directory")
+    parser.add_argument("--batch-size", type=int, default=4, help="Number of cropped lines per TrOCR forward pass (default: 4)")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -226,8 +227,22 @@ if __name__ == "__main__":
 
     if folder_target:
         print(f"Starting batch processing on folder: {folder_target}")
-        batch_process(folder_target, processor=processor, model=model, output_dir=args.output, device=device)
+        batch_process(
+            folder_target,
+            processor=processor,
+            model=model,
+            output_dir=args.output,
+            device=device,
+            batch_size=args.batch_size,
+        )
     else:
         target_image = image_target or f"images/{IMAGE_FILE}.png"
         print(f"Processing single image: {target_image}")
-        process_image(target_image, processor=processor, model=model, output_dir=args.output, device=device)
+        process_image(
+            target_image,
+            processor=processor,
+            model=model,
+            output_dir=args.output,
+            device=device,
+            batch_size=args.batch_size,
+        )

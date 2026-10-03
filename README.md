@@ -38,13 +38,17 @@ Powered by a fine-tuned Vision-Encoder-Decoder model hosted on Hugging Face:
    - **Single image:**
      ```bash
      python main.py --image images/test3.png
+     # Tune TrOCR line batching for your available memory (default: 4)
+     python main.py --image images/test3.png --batch-size 8
      ```
    - **Batch process an entire directory:**
      ```bash
-     python main.py --folder images/
+     python main.py --folder images/ --batch-size 4
      # or using batch_process.py:
-     python batch_process.py images/ --output output/
+     python batch_process.py images/ --output output/ --batch-size 4
      ```
+
+   `--batch-size` controls how many cropped text lines are sent through TrOCR in one forward pass. Use `--batch-size 1` for the previous single-line behavior or a larger value when memory allows.
 
 ---
 

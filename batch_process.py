@@ -131,22 +131,58 @@ def transcribe_lines(
     model=None,
     device: str = "cpu",
     transcribe_fn=None,
+    batch_size: int = 4,
 ) -> tuple[list[str], list[str]]:
+    """Transcribe line crops while preserving their original order.
+
+    Custom transcribe functions keep the existing one-image-at-a-time behavior.
+    TrOCR processor/model pairs are run in configurable batches. Set batch_size
+    to 1 to retain the previous single-line inference behavior.
     """
-    Transcribes a list of line image crops into raw and NLP-corrected texts.
-    Accepts either a custom transcribe_fn(img_path, i) or (processor, model, device).
-    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+
+    if transcribe_fn is not None:
+        raw_lines: list[str] = []
+        nlp_lines: list[str] = []
+        for i, line_img in enumerate(line_image_paths, start=1):
+            raw, nlp = transcribe_fn(str(line_img), i)
+            raw_lines.append(raw)
+            nlp_lines.append(nlp)
+        return raw_lines, nlp_lines
+
+    if processor is None or model is None:
+        raise ValueError("processor and model are required when transcribe_fn is not provided")
+
+    import torch
+    from PIL import Image
+    from main import correct_spanish_text
+
     raw_lines: list[str] = []
     nlp_lines: list[str] = []
 
-    for i, line_img in enumerate(line_image_paths, start=1):
-        if transcribe_fn is not None:
-            raw, nlp = transcribe_fn(str(line_img), i)
-        else:
-            from main import test_single_phrase
-            raw, nlp = test_single_phrase(str(line_img), processor, model, i, device=device)
-        raw_lines.append(raw)
-        nlp_lines.append(nlp)
+    for start in range(0, len(line_image_paths), batch_size):
+        batch_paths = line_image_paths[start:start + batch_size]
+        images = []
+        for image_path in batch_paths:
+            with Image.open(image_path) as image:
+                images.append(image.convert("RGB"))
+
+        pixel_values = processor(
+            images=images,
+            return_tensors="pt",
+        ).pixel_values.to(device)
+
+        with torch.inference_mode():
+            generated_ids = model.generate(
+                pixel_values,
+                max_new_tokens=32,
+                num_beams=1,
+            )
+
+        decoded = processor.batch_decode(generated_ids, skip_special_tokens=True)
+        raw_lines.extend(decoded)
+        nlp_lines.extend(correct_spanish_text(text) for text in decoded)
 
     return raw_lines, nlp_lines
 
@@ -158,6 +194,7 @@ def process_image(
     output_dir: str | Path = "output",
     device: str = "cpu",
     transcribe_fn=None,
+    batch_size: int = 4,
 ) -> dict[str, str]:
     """
     Processes a single image:
@@ -200,6 +237,7 @@ def process_image(
         model=model,
         device=device,
         transcribe_fn=transcribe_fn,
+        batch_size=batch_size,
     )
 
     # Primary output files named exactly after input image
@@ -240,6 +278,7 @@ def batch_process(
     output_dir: str | Path = "output",
     device: str = "cpu",
     transcribe_fn=None,
+    batch_size: int = 4,
 ) -> list[dict[str, str]]:
     """
     Processes all supported images in a directory.
@@ -256,6 +295,7 @@ def batch_process(
             output_dir=output_dir,
             device=device,
             transcribe_fn=transcribe_fn,
+            batch_size=batch_size,
         )
         if res:
             results.append(res)
@@ -272,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("directory", nargs="?", default="images", help="Path to folder containing images (default: images)")
     parser.add_argument("--output", "-o", default="output", help="Output directory (default: output)")
     parser.add_argument("--model-dir", "-m", default="./trocr_spanish_final", help="Path to local TrOCR model directory")
+    parser.add_argument("--batch-size", type=int, default=4, help="Number of cropped lines per TrOCR forward pass (default: 4)")
     args = parser.parse_args()
 
     if not os.path.exists(args.model_dir):
@@ -288,4 +329,11 @@ if __name__ == "__main__":
     model = VisionEncoderDecoderModel.from_pretrained(args.model_dir).to(device)
     model.eval()
 
-    batch_process(args.directory, processor=processor, model=model, output_dir=args.output, device=device)
+    batch_process(
+        args.directory,
+        processor=processor,
+        model=model,
+        output_dir=args.output,
+        device=device,
+        batch_size=args.batch_size,
+    )
